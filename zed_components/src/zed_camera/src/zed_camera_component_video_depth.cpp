@@ -23,6 +23,9 @@
 
 #include <image_transport/camera_common.hpp>
 
+#include <algorithm>
+#include <cstring>
+
 namespace stereolabs
 {
 
@@ -735,10 +738,39 @@ void ZedCamera::fillCamInfo(
   rightCamInfoMsg->p[5] = static_cast<double>(zedParam.right_cam.fy);
   rightCamInfoMsg->p[6] = static_cast<double>(zedParam.right_cam.cy);
   rightCamInfoMsg->p[10] = 1.0;
-  leftCamInfoMsg->width = rightCamInfoMsg->width =
-    static_cast<uint32_t>(mMatResol.width);
-  leftCamInfoMsg->height = rightCamInfoMsg->height =
-    static_cast<uint32_t>(mMatResol.height);
+  if (mSquareSize > 0 && mSquareCropSize > 0 && mSquareOutputSize > 0) {
+    const double scale =
+      static_cast<double>(mSquareOutputSize) / static_cast<double>(mSquareCropSize);
+
+    leftCamInfoMsg->k[0] *= scale;
+    leftCamInfoMsg->k[2] = (leftCamInfoMsg->k[2] - mSquareCropXOffset) * scale;
+    leftCamInfoMsg->k[4] *= scale;
+    leftCamInfoMsg->k[5] = (leftCamInfoMsg->k[5] - mSquareCropYOffset) * scale;
+    rightCamInfoMsg->k[0] *= scale;
+    rightCamInfoMsg->k[2] = (rightCamInfoMsg->k[2] - mSquareCropXOffset) * scale;
+    rightCamInfoMsg->k[4] *= scale;
+    rightCamInfoMsg->k[5] = (rightCamInfoMsg->k[5] - mSquareCropYOffset) * scale;
+
+    leftCamInfoMsg->p[0] *= scale;
+    leftCamInfoMsg->p[2] = (leftCamInfoMsg->p[2] - mSquareCropXOffset) * scale;
+    leftCamInfoMsg->p[5] *= scale;
+    leftCamInfoMsg->p[6] = (leftCamInfoMsg->p[6] - mSquareCropYOffset) * scale;
+    rightCamInfoMsg->p[0] *= scale;
+    rightCamInfoMsg->p[2] = (rightCamInfoMsg->p[2] - mSquareCropXOffset) * scale;
+    rightCamInfoMsg->p[3] *= scale;
+    rightCamInfoMsg->p[5] *= scale;
+    rightCamInfoMsg->p[6] = (rightCamInfoMsg->p[6] - mSquareCropYOffset) * scale;
+
+    leftCamInfoMsg->width = rightCamInfoMsg->width =
+      static_cast<uint32_t>(mSquareOutputSize);
+    leftCamInfoMsg->height = rightCamInfoMsg->height =
+      static_cast<uint32_t>(mSquareOutputSize);
+  } else {
+    leftCamInfoMsg->width = rightCamInfoMsg->width =
+      static_cast<uint32_t>(mMatResol.width);
+    leftCamInfoMsg->height = rightCamInfoMsg->height =
+      static_cast<uint32_t>(mMatResol.height);
+  }
   leftCamInfoMsg->header.frame_id = leftFrameId;
   rightCamInfoMsg->header.frame_id = rightFrameId;
 }
@@ -1499,6 +1531,7 @@ bool ZedCamera::retrieveLeftImage(bool gpu)
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
       mRgbSubscribed = true;
+      applySquareCrop(mMatLeft, gpu);
       DEBUG_STREAM_VD(" * Left image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1520,6 +1553,7 @@ bool ZedCamera::retrieveLeftRawImage(bool gpu)
 #endif
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatLeftRaw, gpu);
       DEBUG_STREAM_VD(" * Left raw image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1541,6 +1575,7 @@ bool ZedCamera::retrieveRightImage(bool gpu)
 #endif
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatRight, gpu);
       DEBUG_STREAM_VD(" * Right image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1562,6 +1597,7 @@ bool ZedCamera::retrieveRightRawImage(bool gpu)
 #endif
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatRightRaw, gpu);
       DEBUG_STREAM_VD(" * Right raw image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1578,6 +1614,7 @@ bool ZedCamera::retrieveLeftGrayImage(bool gpu)
       mMatLeftGray, sl::VIEW::LEFT_GRAY,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatLeftGray, gpu);
       DEBUG_STREAM_VD(" * Left gray image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1594,6 +1631,7 @@ bool ZedCamera::retrieveLeftRawGrayImage(bool gpu)
       mMatLeftRawGray, sl::VIEW::LEFT_UNRECTIFIED_GRAY,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatLeftRawGray, gpu);
       DEBUG_STREAM_VD(
         " * Left gray raw image retrieved into " << (gpu ? "GPU" : "CPU") <<
           " memory");
@@ -1612,6 +1650,7 @@ bool ZedCamera::retrieveRightGrayImage(bool gpu)
       mMatRightGray, sl::VIEW::RIGHT_GRAY,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatRightGray, gpu);
       DEBUG_STREAM_VD(" * Right gray image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1628,6 +1667,7 @@ bool ZedCamera::retrieveRightRawGrayImage(bool gpu)
       mMatRightRawGray, sl::VIEW::RIGHT_UNRECTIFIED_GRAY,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatRightRawGray, gpu);
       DEBUG_STREAM_VD(
         " * Right gray raw image retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
@@ -1645,6 +1685,7 @@ bool ZedCamera::retrieveDepthMap(bool gpu)
       mMatDepth, sl::MEASURE::DEPTH,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatDepth, gpu);
       DEBUG_STREAM_VD(" * Depth map retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1661,6 +1702,7 @@ bool ZedCamera::retrieveDisparity()
       mMatDisp, sl::MEASURE::DISPARITY,
       sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatDisp, false);
       DEBUG_VD(" * Disparity map retrieved");
     }
     return ok;
@@ -1677,6 +1719,7 @@ bool ZedCamera::retrieveConfidence(bool gpu)
       mMatConf, sl::MEASURE::CONFIDENCE,
       gpu ? sl::MEM::GPU : sl::MEM::CPU, mMatResol);
     if (ok) {
+      applySquareCrop(mMatConf, gpu);
       DEBUG_STREAM_VD(" * Confidence map retrieved into " << (gpu ? "GPU" : "CPU") << " memory");
     }
     return ok;
@@ -1695,6 +1738,90 @@ bool ZedCamera::retrieveDepthInfo()
     return ok;
   }
   return false;
+}
+
+void ZedCamera::applySquareCrop(sl::Mat & mat, bool gpu)
+{
+  if (mSquareSize <= 0) {
+    return;
+  }
+
+  const int width = static_cast<int>(mat.getWidth());
+  const int height = static_cast<int>(mat.getHeight());
+  if (width <= 0 || height <= 0 || width == height) {
+    return;
+  }
+
+  const int crop_size = std::min(width, height);
+  const int output_size = mSquareOutputSize > 0 ? mSquareOutputSize : crop_size;
+  const int x_offset = (width - crop_size) / 2;
+  const int y_offset = (height - crop_size) / 2;
+  const sl::MEM memory_type = gpu ? sl::MEM::GPU : sl::MEM::CPU;
+  sl::Mat cropped(crop_size, crop_size, mat.getDataType(), sl::MEM::CPU);
+
+  const size_t row_bytes = cropped.getWidthBytes();
+  const size_t src_step = mat.getStepBytes(memory_type);
+  const size_t dst_step = cropped.getStepBytes(sl::MEM::CPU);
+  const size_t src_offset =
+    static_cast<size_t>(y_offset) * src_step +
+    static_cast<size_t>(x_offset) * mat.getPixelBytes();
+
+  if (gpu) {
+#ifdef FOUND_ISAAC_ROS_NITROS
+    CUDA_CHECK(cudaMemcpy2D(
+      cropped.getPtr<sl::uchar1>(sl::MEM::CPU), dst_step,
+      mat.getPtr<sl::uchar1>(sl::MEM::GPU) + src_offset, src_step,
+      row_bytes, crop_size, cudaMemcpyDeviceToHost));
+#else
+    return;
+#endif
+  } else {
+    const auto * src = mat.getPtr<sl::uchar1>(sl::MEM::CPU) + src_offset;
+    auto * dst = cropped.getPtr<sl::uchar1>(sl::MEM::CPU);
+    for (int row = 0; row < crop_size; ++row) {
+      std::memcpy(dst + static_cast<size_t>(row) * dst_step,
+        src + static_cast<size_t>(row) * src_step, row_bytes);
+    }
+  }
+
+  sl::Mat resized(output_size, output_size, mat.getDataType(), sl::MEM::CPU);
+  const size_t resized_pixel_bytes = resized.getPixelBytes();
+  const size_t resized_src_step = cropped.getStepBytes(sl::MEM::CPU);
+  const size_t resized_dst_step = resized.getStepBytes(sl::MEM::CPU);
+  const auto * resized_src = cropped.getPtr<sl::uchar1>(sl::MEM::CPU);
+  auto * resized_dst = resized.getPtr<sl::uchar1>(sl::MEM::CPU);
+
+  for (int dst_y = 0; dst_y < output_size; ++dst_y) {
+    const int src_y = dst_y * crop_size / output_size;
+    for (int dst_x = 0; dst_x < output_size; ++dst_x) {
+      const int src_x = dst_x * crop_size / output_size;
+      std::memcpy(
+        resized_dst + static_cast<size_t>(dst_y) * resized_dst_step +
+          static_cast<size_t>(dst_x) * resized_pixel_bytes,
+        resized_src + static_cast<size_t>(src_y) * resized_src_step +
+          static_cast<size_t>(src_x) * resized_pixel_bytes,
+        resized_pixel_bytes);
+    }
+  }
+
+  resized.timestamp = mat.timestamp;
+  if (gpu) {
+#ifdef FOUND_ISAAC_ROS_NITROS
+    sl::Mat resized_gpu(output_size, output_size, mat.getDataType(), sl::MEM::GPU);
+    CUDA_CHECK(cudaMemcpy2D(
+      resized_gpu.getPtr<sl::uchar1>(sl::MEM::GPU),
+      resized_gpu.getStepBytes(sl::MEM::GPU),
+      resized.getPtr<sl::uchar1>(sl::MEM::CPU),
+      resized.getStepBytes(sl::MEM::CPU),
+      resized.getWidthBytes(), output_size, cudaMemcpyHostToDevice));
+    resized_gpu.timestamp = mat.timestamp;
+    mat = resized_gpu;
+#else
+    return;
+#endif
+  } else {
+    mat = resized;
+  }
 }
 
 void ZedCamera::publishVideoDepth(rclcpp::Time & out_pub_ts)

@@ -267,6 +267,7 @@ protected:
   bool retrieveConfidence(bool gpu);
   bool retrieveDisparity();
   bool retrieveDepthInfo();
+  void applySquareCrop(sl::Mat & mat, bool gpu);
 
   void publishVideoDepth(rclcpp::Time & out_pub_ts);
   void publishLeftAndRgbImages(const rclcpp::Time & t);
@@ -727,6 +728,11 @@ private:
   int mCamWidth;   // Camera frame width
   int mCamHeight;  // Camera frame height
   sl::Resolution mMatResol;
+  int mSquareSize = 0;
+  int mSquareCropSize = 0;
+  int mSquareOutputSize = 0;
+  int mSquareCropXOffset = 0;
+  int mSquareCropYOffset = 0;
   sl::Resolution mPcResol;
   // <---- Stereolabs Mat Info
 

@@ -101,6 +101,7 @@ protected:
   bool areImageTopicsSubscribed();
   bool areSensorsTopicsSubscribed();
   void retrieveImages(bool gpu);
+  void applySquareCrop(sl::Mat & mat, bool gpu);
   void publishImages();
   void publishColorImage(const rclcpp::Time & timeStamp);
   void publishColorRawImage(const rclcpp::Time & timeStamp);
@@ -465,6 +466,11 @@ private:
   int _camWidth;   // Camera frame width
   int _camHeight;  // Camera frame height
   sl::Resolution _matResol;
+  int _squareSize = 0;
+  int _squareCropSize = 0;
+  int _squareOutputSize = 0;
+  int _squareCropXOffset = 0;
+  int _squareCropYOffset = 0;
   // <---- Stereolabs Mat Info
 
   // ----> Camera infos
