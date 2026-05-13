@@ -6,6 +6,7 @@
     ros__parameters:
         general:
             serial_number: 0 # overwritten by launch file
+            square_size: 0 # Output side length after center square crop. Set to 0 to disable square crop
             pub_resolution: "CUSTOM" # The resolution used for output. 'NATIVE' to use the same `general.grab_resolution` - `CUSTOM` to apply the `general.pub_downscale_factor` downscale factory to reduce bandwidth in transmission
             pub_downscale_factor: 2.0 # rescale factor used to rescale image before publishing when 'pub_resolution' is 'CUSTOM'
             gpu_id: -1

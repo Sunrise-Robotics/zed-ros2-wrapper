@@ -17,6 +17,9 @@
 
 #include <image_transport/camera_common.hpp>
 
+#include <algorithm>
+#include <cstring>
+
 #include <sensor_msgs/distortion_models.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 
@@ -363,8 +366,26 @@ void ZedCameraOne::fillCamInfo(
   camInfoMsg->p[10] = 1.0;
 
   // Image size
-  camInfoMsg->width = static_cast<uint32_t>(_matResol.width);
-  camInfoMsg->height = static_cast<uint32_t>(_matResol.height);
+  if (_squareSize > 0 && _squareCropSize > 0 && _squareOutputSize > 0) {
+    const double scale =
+      static_cast<double>(_squareOutputSize) / static_cast<double>(_squareCropSize);
+
+    camInfoMsg->k[0] *= scale;
+    camInfoMsg->k[2] = (camInfoMsg->k[2] - _squareCropXOffset) * scale;
+    camInfoMsg->k[4] *= scale;
+    camInfoMsg->k[5] = (camInfoMsg->k[5] - _squareCropYOffset) * scale;
+
+    camInfoMsg->p[0] *= scale;
+    camInfoMsg->p[2] = (camInfoMsg->p[2] - _squareCropXOffset) * scale;
+    camInfoMsg->p[5] *= scale;
+    camInfoMsg->p[6] = (camInfoMsg->p[6] - _squareCropYOffset) * scale;
+
+    camInfoMsg->width = static_cast<uint32_t>(_squareOutputSize);
+    camInfoMsg->height = static_cast<uint32_t>(_squareOutputSize);
+  } else {
+    camInfoMsg->width = static_cast<uint32_t>(_matResol.width);
+    camInfoMsg->height = static_cast<uint32_t>(_matResol.height);
+  }
   camInfoMsg->header.frame_id = frameId;
 }
 
@@ -454,6 +475,7 @@ void ZedCameraOne::retrieveImages(bool gpu)
 #endif
         gpu ? sl::MEM::GPU : sl::MEM::CPU, _matResol));
     _sdkGrabTS = _matColor.timestamp;
+    applySquareCrop(_matColor, gpu);
     DEBUG_STREAM_VD(
       "Color image " << _matResol.width << "x" << _matResol.height << " retrieved - timestamp: " <<
         _sdkGrabTS.getNanoseconds() <<
@@ -470,6 +492,7 @@ void ZedCameraOne::retrieveImages(bool gpu)
 #endif
         gpu ? sl::MEM::GPU : sl::MEM::CPU, _matResol));
     _sdkGrabTS = _matColorRaw.timestamp;
+    applySquareCrop(_matColorRaw, gpu);
     DEBUG_STREAM_VD(
       "Color raw image " << _matResol.width << "x" << _matResol.height <<
         " retrieved - timestamp: " << _sdkGrabTS.getNanoseconds() <<
@@ -481,6 +504,7 @@ void ZedCameraOne::retrieveImages(bool gpu)
         _matGray, sl::VIEW::LEFT_GRAY,
         gpu ? sl::MEM::GPU : sl::MEM::CPU, _matResol));
     _sdkGrabTS = _matGray.timestamp;
+    applySquareCrop(_matGray, gpu);
     DEBUG_STREAM_VD(
       "Gray image " << _matResol.width << "x" << _matResol.height << " retrieved - timestamp: " <<
         _sdkGrabTS.getNanoseconds() <<
@@ -493,6 +517,7 @@ void ZedCameraOne::retrieveImages(bool gpu)
         _matGrayRaw, sl::VIEW::LEFT_UNRECTIFIED_GRAY,
         gpu ? sl::MEM::GPU : sl::MEM::CPU, _matResol));
     _sdkGrabTS = _matGrayRaw.timestamp;
+    applySquareCrop(_matGrayRaw, gpu);
     DEBUG_STREAM_VD(
       "Gray raw image " << _matResol.width << "x" << _matResol.height <<
         " retrieved - timestamp: " << _sdkGrabTS.getNanoseconds() <<
@@ -1161,6 +1186,90 @@ void ZedCameraOne::publishCameraInfos()
   publishCameraInfo(_pubColorRawImgInfoTrans, _camInfoRawMsg, pub_ts);
   publishCameraInfo(_pubGrayImgInfoTrans, _camInfoMsg, pub_ts);
   publishCameraInfo(_pubGrayRawImgInfoTrans, _camInfoRawMsg, pub_ts);
+}
+
+void ZedCameraOne::applySquareCrop(sl::Mat & mat, bool gpu)
+{
+  if (_squareSize <= 0) {
+    return;
+  }
+
+  const int width = static_cast<int>(mat.getWidth());
+  const int height = static_cast<int>(mat.getHeight());
+  if (width <= 0 || height <= 0 || width == height) {
+    return;
+  }
+
+  const int crop_size = std::min(width, height);
+  const int output_size = _squareOutputSize > 0 ? _squareOutputSize : crop_size;
+  const int x_offset = (width - crop_size) / 2;
+  const int y_offset = (height - crop_size) / 2;
+  const sl::MEM memory_type = gpu ? sl::MEM::GPU : sl::MEM::CPU;
+  sl::Mat cropped(crop_size, crop_size, mat.getDataType(), sl::MEM::CPU);
+
+  const size_t row_bytes = cropped.getWidthBytes();
+  const size_t src_step = mat.getStepBytes(memory_type);
+  const size_t dst_step = cropped.getStepBytes(sl::MEM::CPU);
+  const size_t src_offset =
+    static_cast<size_t>(y_offset) * src_step +
+    static_cast<size_t>(x_offset) * mat.getPixelBytes();
+
+  if (gpu) {
+#ifdef FOUND_ISAAC_ROS_NITROS
+    CUDA_CHECK(cudaMemcpy2D(
+      cropped.getPtr<sl::uchar1>(sl::MEM::CPU), dst_step,
+      mat.getPtr<sl::uchar1>(sl::MEM::GPU) + src_offset, src_step,
+      row_bytes, crop_size, cudaMemcpyDeviceToHost));
+#else
+    return;
+#endif
+  } else {
+    const auto * src = mat.getPtr<sl::uchar1>(sl::MEM::CPU) + src_offset;
+    auto * dst = cropped.getPtr<sl::uchar1>(sl::MEM::CPU);
+    for (int row = 0; row < crop_size; ++row) {
+      std::memcpy(dst + static_cast<size_t>(row) * dst_step,
+        src + static_cast<size_t>(row) * src_step, row_bytes);
+    }
+  }
+
+  sl::Mat resized(output_size, output_size, mat.getDataType(), sl::MEM::CPU);
+  const size_t resized_pixel_bytes = resized.getPixelBytes();
+  const size_t resized_src_step = cropped.getStepBytes(sl::MEM::CPU);
+  const size_t resized_dst_step = resized.getStepBytes(sl::MEM::CPU);
+  const auto * resized_src = cropped.getPtr<sl::uchar1>(sl::MEM::CPU);
+  auto * resized_dst = resized.getPtr<sl::uchar1>(sl::MEM::CPU);
+
+  for (int dst_y = 0; dst_y < output_size; ++dst_y) {
+    const int src_y = dst_y * crop_size / output_size;
+    for (int dst_x = 0; dst_x < output_size; ++dst_x) {
+      const int src_x = dst_x * crop_size / output_size;
+      std::memcpy(
+        resized_dst + static_cast<size_t>(dst_y) * resized_dst_step +
+          static_cast<size_t>(dst_x) * resized_pixel_bytes,
+        resized_src + static_cast<size_t>(src_y) * resized_src_step +
+          static_cast<size_t>(src_x) * resized_pixel_bytes,
+        resized_pixel_bytes);
+    }
+  }
+
+  resized.timestamp = mat.timestamp;
+  if (gpu) {
+#ifdef FOUND_ISAAC_ROS_NITROS
+    sl::Mat resized_gpu(output_size, output_size, mat.getDataType(), sl::MEM::GPU);
+    CUDA_CHECK(cudaMemcpy2D(
+      resized_gpu.getPtr<sl::uchar1>(sl::MEM::GPU),
+      resized_gpu.getStepBytes(sl::MEM::GPU),
+      resized.getPtr<sl::uchar1>(sl::MEM::CPU),
+      resized.getStepBytes(sl::MEM::CPU),
+      resized.getWidthBytes(), output_size, cudaMemcpyHostToDevice));
+    resized_gpu.timestamp = mat.timestamp;
+    mat = resized_gpu;
+#else
+    return;
+#endif
+  } else {
+    mat = resized;
+  }
 }
 
 }

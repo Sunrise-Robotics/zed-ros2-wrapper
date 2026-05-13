@@ -18,6 +18,7 @@
 #include <rclcpp/time.hpp>
 #include <rclcpp/utilities.hpp>
 
+#include <algorithm>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 
 using namespace std::chrono_literals;
@@ -462,6 +463,10 @@ void ZedCameraOne::getResolutionParams()
   } else {
     _customDownscaleFactor = 1.0;
   }
+
+  sl_tools::getParam(
+    shared_from_this(), "general.square_size", _squareSize,
+    _squareSize, " * Square size: ", false, 0, 8192);
 }
 
 void ZedCameraOne::getOpencvCalibrationParam()
@@ -1047,10 +1052,22 @@ void ZedCameraOne::processCameraInformation()
   }
 
   _matResol = sl::Resolution(pub_w, pub_h);
+  _squareCropSize = std::min(pub_w, pub_h);
+  const bool square_crop_enabled = _squareSize > 0;
+  _squareOutputSize = square_crop_enabled ? _squareSize : _squareCropSize;
+  _squareCropXOffset = (pub_w - _squareCropSize) / 2;
+  _squareCropYOffset = (pub_h - _squareCropSize) / 2;
   RCLCPP_INFO_STREAM(
     get_logger(), " * Publishing frame size  -> "
       << _matResol.width << "x"
       << _matResol.height);
+  if (square_crop_enabled) {
+    RCLCPP_INFO_STREAM(
+      get_logger(), " * Square crop publishing size -> "
+        << _squareOutputSize << "x" << _squareOutputSize
+        << " (offset " << _squareCropXOffset << ","
+        << _squareCropYOffset << ")");
+  }
 }
 
 void ZedCameraOne::initializeTimestamp()

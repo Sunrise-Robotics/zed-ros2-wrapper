@@ -18,6 +18,7 @@
 
 #include <sys/resource.h>
 
+#include <algorithm>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <limits>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
@@ -1147,6 +1148,10 @@ void ZedCamera::getGeneralParams()
   } else {
     mCustomDownscaleFactor = 1.0;
   }
+
+  sl_tools::getParam(
+    shared_from_this(), "general.square_size", mSquareSize,
+    mSquareSize, " * Square size: ", false, 0, 8192);
 
   sl_tools::getParam(
     shared_from_this(), "general.optional_opencv_calibration_file",
@@ -2909,10 +2914,22 @@ bool ZedCamera::startCamera()
   int pub_w = static_cast<int>(std::round(mCamWidth / mCustomDownscaleFactor));
   int pub_h = static_cast<int>(std::round(mCamHeight / mCustomDownscaleFactor));
   mMatResol = sl::Resolution(pub_w, pub_h);
+  mSquareCropSize = std::min(pub_w, pub_h);
+  const bool square_crop_enabled = mSquareSize > 0;
+  mSquareOutputSize = square_crop_enabled ? mSquareSize : mSquareCropSize;
+  mSquareCropXOffset = (pub_w - mSquareCropSize) / 2;
+  mSquareCropYOffset = (pub_h - mSquareCropSize) / 2;
 
   RCLCPP_INFO_STREAM(
     get_logger(), " * Color/Depth publishing size -> "
       << mMatResol.width << "x" << mMatResol.height);
+  if (square_crop_enabled) {
+    RCLCPP_INFO_STREAM(
+      get_logger(), " * Square crop publishing size -> "
+        << mSquareOutputSize << "x" << mSquareOutputSize
+        << " (offset " << mSquareCropXOffset << ","
+        << mSquareCropYOffset << ")");
+  }
   // <---- Camera information
 
   // ----> Point Cloud resolution
